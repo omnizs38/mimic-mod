@@ -39,6 +39,12 @@ public class MimicWanderGoal extends RandomStrollGoal {
         }
     }
 
+    @Override
+    public boolean canContinueToUse() {
+        return !mimic.isAngry() && !mimic.isStealth() && !mimic.isLocked() && !mimic.isOpen()
+                && super.canContinueToUse();
+    }
+
     @Nullable
     protected Vec3 getPosition() {
         if (this.mob.isInWaterOrBubble()) {

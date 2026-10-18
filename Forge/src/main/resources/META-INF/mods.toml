@@ -7,7 +7,7 @@
 modLoader="javafml" #mandatory
 
 # A version range to match for said mod loader - for regular FML @Mod it will be the forge version
-loaderVersion="[41,)" #mandatory This is typically bumped every Minecraft version by Forge. See our download page for lists of versions.
+loaderVersion="[43,)" #mandatory This is typically bumped every Minecraft version by Forge. See our download page for lists of versions.
 
 # The license for you mod. This is mandatory metadata and allows for easier comprehension of your redistributive properties.
 # Review your options at https://choosealicense.com/. All rights reserved is the default copyright stance, and is thus the default here.
@@ -33,10 +33,10 @@ displayName="Mimic" #mandatory
 #updateJSONURL="https://change.me.example.invalid/updates.json" #optional
 
 # A URL for the "homepage" for this mod, displayed in the mod UI
-displayURL="https://github.com/LukeGrahamLandry/mimic-mod" #optional
+displayURL="https://github.com/omnizs38/mimic-mod" #optional
 
 # A file name (in the root of the mod JAR) containing a logo for display
-logoFile="examplemod.png" #optional
+ #optional
 
 # A text field displayed in the mod UI
 credits="Art by Redrix & EpicNecromancer1" #optional
@@ -56,7 +56,7 @@ Adds a mimic monster that pretends to be a chest
     # Does this dependency have to exist - if not, ordering below must be specified
     mandatory=true #mandatory
     # The version range of the dependency
-    versionRange="[41.0.64,)" #mandatory
+    versionRange="[43.3.8,44)" #mandatory
     # An ordering relationship for the dependency - BEFORE or AFTER required if the relationship is not mandatory
     ordering="NONE"
     # Side this dependency is applied on - BOTH, CLIENT or SERVER
@@ -66,12 +66,12 @@ Adds a mimic monster that pretends to be a chest
     modId="minecraft"
     mandatory=true
 # This version range declares a minimum of the current minecraft version up to but not including the next major version
-    versionRange="[1.19,)"
+    versionRange="[1.19.2]"
     ordering="NONE"
     side="BOTH"
 [[dependencies.mimic]]
     modId="geckolib3"
     mandatory=true
-    versionRange="[3.1.0,)"
+    versionRange="[3.1.14,4)"
     ordering="BEFORE"
     side="BOTH"

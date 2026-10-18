@@ -1,3 +1,17 @@
-- make the mimic eating the chest it spawned on more reliable so you dont end up duplicating items
-- config for mimic spawn chance
-- torohealth doesn't show bars for stealthed mimics
+1.4.0 — Multiplayer horror director
+- Add persistent world-day escalation shared by dimensions, with configurable linear health/damage/speed growth and bounded pursuit/awareness increases.
+- Add expiring per-mimic multi-player awareness, fair focus rotation, attacker threat, and no redirection of an active bite.
+- Add short-range forward-cone secondary bite damage with line-of-sight, creative/spectator, and ownership safeguards.
+- Add unseen stalking that stops when an eligible player watches; active combat is not frozen by staring.
+- Add randomized day/night/all-dimension encounters in safe loaded locations, private vanilla positional false alarms, and independent player cooldowns.
+- Add login/death/dimension grace, saved cooldowns, spawn admission caps, limited encounter work, spawn veto hooks, and cleanup only for untouched empty director mobs away from players.
+- Preserve traps, tamed storage, legacy saves, axe counterplay, existing structure spawns, and the Forge 1.19.2 / Java 17 / GeckoLib 3 target.
+- Expand validation to 21 unit tests and 22 Forge GameTests, including recording-connection multiplayer isolation and multi-player damage.
+
+1.3.0 — Forge 1.19.2 only
+- Remove the Fabric target and external build-script requirements.
+- Fix dedicated-server classloading, malformed owner/inventory saves, remote inventory access, and shift-click trap bypasses.
+- Fix chest-search teleportation, spawn queue iteration, duplicate heart scheduling, and unsafe chest removal before entity insertion.
+- Add server-managed combat settings, rear ambushes, attacker-specific targeting, sight memory, bounded pursuit, and throttled pathfinding.
+- Preserve legacy ownership/inventory data and axe counterplay; respect mobGriefing for autonomous chest consumption.
+- Add pursuit unit tests, Forge GameTests, and CI with full diagnostic artifacts.

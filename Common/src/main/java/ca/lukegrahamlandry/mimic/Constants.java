@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 public class Constants {
 
 	public static final String MOD_ID = "mimic";
-	public static final String MOD_NAME = "Multi Loader Template";
+	public static final String MOD_NAME = "Mimic";
 	public static final Logger LOG = LoggerFactory.getLogger(MOD_NAME);
 
 	public static final ResourceLocation MIMIC_ENTITY_ID = new ResourceLocation(MOD_ID, "mimic");

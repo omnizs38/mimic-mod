@@ -26,3 +26,4 @@ forge*changelog.txt
 
 # Mac OS
 **/.DS_Store
+run-gametest/

@@ -14,9 +14,11 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 public class RenderHandler {
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
+        event.enqueueWork(() -> {
         EntityRenderers.register(EntityInit.MIMIC.get(), MimicRenderer::new);
 
         MenuScreens.register(ContainerInit.EVIL_MIMIC.get(), CustomChestScreen::createEvil);
         MenuScreens.register(ContainerInit.TAME_MIMIC.get(), CustomChestScreen::createTame);
+        });
     }
 }

@@ -5,6 +5,8 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 
 public class FakeChestItem extends Item {
@@ -16,10 +18,11 @@ public class FakeChestItem extends Item {
     public InteractionResult useOn(UseOnContext context) {
         BlockState state = context.getLevel().getBlockState(context.getClickedPos());
 
-        if (state.is(Blocks.CHEST) && context.getPlayer().isShiftKeyDown()){
-            TickHandler.spawns.add(new TickHandler.MimicSpawnData(context.getLevel(), context.getClickedPos()));
-            if (!context.getPlayer().isCreative()) context.getPlayer().getItemInHand(context.getHand()).shrink(1);
-            return InteractionResult.SUCCESS;
+        if (state.getBlock() instanceof ChestBlock && context.getPlayer() != null && context.getPlayer().isShiftKeyDown()) {
+            if (context.getLevel().isClientSide) return InteractionResult.SUCCESS;
+            if (!TickHandler.schedule((ServerLevel) context.getLevel(), context.getClickedPos())) return InteractionResult.FAIL;
+            if (!context.getPlayer().isCreative()) context.getItemInHand().shrink(1);
+            return InteractionResult.CONSUME;
         }
 
         return super.useOn(context);

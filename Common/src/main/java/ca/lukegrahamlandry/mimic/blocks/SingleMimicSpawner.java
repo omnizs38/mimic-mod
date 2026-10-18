@@ -9,6 +9,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.Random;
@@ -25,11 +26,12 @@ public class SingleMimicSpawner extends Block {
     public void tick(BlockState state, ServerLevel world, BlockPos pos, RandomSource rand) {
         world.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
 
-        if (rand.nextInt(Services.PLATFORM.mimicSpawnChance()) == 0){
+        if (world.getBlockState(pos.below()).getBlock() instanceof ChestBlock
+                && rand.nextInt(Services.PLATFORM.mimicSpawnChance()) == 0) {
             MimicEntity e = (MimicEntity) Registry.ENTITY_TYPE.get(Constants.MIMIC_ENTITY_ID).create(world);
+            if (e == null) return;
             e.setPos(pos.getX() + 0.5D, pos.getY(), pos.getZ() + 0.5D);
-            world.addFreshEntity(e);
-            e.consumeChest(pos.below());
+            if (world.addFreshEntity(e)) e.consumeChest(pos.below());
         }
     }
 

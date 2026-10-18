@@ -4,58 +4,54 @@ import ca.lukegrahamlandry.mimic.Constants;
 import ca.lukegrahamlandry.mimic.entities.MimicEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
-
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 public class TickHandler {
-    public static List<MimicSpawnData> spawns = new ArrayList<>();
+    public static final List<MimicSpawnData> spawns = new ArrayList<>();
+
+    public static boolean schedule(ServerLevel level, BlockPos pos) {
+        if (spawns.stream().anyMatch(s -> s.world == level && s.pos.equals(pos))) return false;
+        spawns.add(new MimicSpawnData(level, pos.immutable()));
+        return true;
+    }
 
     public static void onServerTick() {
-        for (MimicSpawnData spawn : spawns){
-            spawn.time--;
-            if (spawn.time <= 0){
+        Iterator<MimicSpawnData> iterator = spawns.iterator();
+        while (iterator.hasNext()) {
+            MimicSpawnData spawn = iterator.next();
+            if (spawn.time > 0) spawn.time--;
+            // Do not force-load a chunk just to transform a chest.
+            if (spawn.time == 0 && spawn.world.hasChunkAt(spawn.pos)) {
+                iterator.remove();
                 spawnMimic(spawn);
-                spawns.remove(spawn);
-                return;
             }
         }
     }
 
     private static void spawnMimic(MimicSpawnData spawn) {
-        BlockState state = spawn.world.getBlockState(spawn.pos);
-        if (state.is(Blocks.CHEST)){
-            ChestBlockEntity chest = (ChestBlockEntity) spawn.world.getBlockEntity(spawn.pos);
-            MimicEntity mimic = (MimicEntity) Registry.ENTITY_TYPE.get(Constants.MIMIC_ENTITY_ID).create(spawn.world);
-
-            // take items
-            for (int i=0;i<chest.getContainerSize();i++){
-                mimic.addItem(chest.getItem(i));
-                chest.setItem(i, ItemStack.EMPTY);
-            }
-
-            spawn.world.setBlock(spawn.pos, Blocks.AIR.defaultBlockState(), 3);
-            mimic.snapToBlock(spawn.pos, state.getValue(ChestBlock.FACING));
-            mimic.setStealth(true);
-            spawn.world.addFreshEntity(mimic);
-        }
+        if (!(spawn.world.getBlockState(spawn.pos).getBlock() instanceof ChestBlock)
+                || !(spawn.world.getBlockEntity(spawn.pos) instanceof ChestBlockEntity)
+                || ChestBlockEntity.getOpenCount(spawn.world, spawn.pos) > 0) return;
+        MimicEntity mimic = (MimicEntity) Registry.ENTITY_TYPE.get(Constants.MIMIC_ENTITY_ID).create(spawn.world);
+        if (mimic == null) return;
+        mimic.snapToBlock(spawn.pos.above(), null);
+        // Only remove the chest after successful entity insertion (events may veto spawning).
+        if (spawn.world.addFreshEntity(mimic)) mimic.consumeChest(spawn.pos);
     }
 
     public static class MimicSpawnData {
         public final BlockPos pos;
-        public int time;
-        public final Level world;
+        public int time = 40;
+        public final ServerLevel world;
 
-        public MimicSpawnData(Level level, BlockPos position){
-            this.pos = position;
-            this.time = 40;
-            this.world = level;
+        private MimicSpawnData(ServerLevel world, BlockPos pos) {
+            this.pos = pos;
+            this.world = world;
         }
     }
 }

@@ -1,6 +1,7 @@
 package ca.lukegrahamlandry.mimic.client;
 
 import ca.lukegrahamlandry.mimic.Constants;
+import ca.lukegrahamlandry.mimic.entities.MimicEntity;
 import net.minecraft.core.Registry;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
@@ -60,6 +61,7 @@ public class MimicContainer extends AbstractContainerMenu {
 
     public ItemStack quickMoveStack(Player p_82846_1_, int p_82846_2_) {
         ItemStack itemstack = ItemStack.EMPTY;
+        if (p_82846_2_ < 0 || p_82846_2_ >= slots.size()) return ItemStack.EMPTY;
         Slot slot = this.slots.get(p_82846_2_);
         if (slot != null && slot.hasItem()) {
             ItemStack itemstack1 = slot.getItem();
@@ -72,6 +74,7 @@ public class MimicContainer extends AbstractContainerMenu {
                 return ItemStack.EMPTY;
             }
 
+            if (p_82846_2_ < this.containerRows * 9 && container instanceof MimicEntity mimic) mimic.onItemTaken();
             if (itemstack1.isEmpty()) {
                 slot.set(ItemStack.EMPTY);
             } else {

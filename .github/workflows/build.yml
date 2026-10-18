@@ -1,0 +1,38 @@
+name: Forge 1.19.2
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and run regression tests
+        shell: bash
+        run: |
+          mkdir -p logs
+          if ./gradlew :Forge:build :Forge:runGameTestServer --console=plain >logs/forge-build.log 2>&1; then
+            tail -n 25 logs/forge-build.log
+          else
+            tail -n 80 logs/forge-build.log
+            exit 1
+          fi
+      - name: Upload build, test reports, and full logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mimic-forge-1.19.2
+          path: |
+            Forge/build/libs/*.jar
+            Forge/build/reports/tests/
+            Forge/build/test-results/
+            Forge/run-gametest/logs/
+            logs/forge-build.log

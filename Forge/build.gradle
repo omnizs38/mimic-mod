@@ -5,7 +5,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath group: 'net.minecraftforge.gradle', name: 'ForgeGradle', version: '5.1.+', changing: true
+        classpath group: 'net.minecraftforge.gradle', name: 'ForgeGradle', version: '5.1.77'
         classpath group: 'org.spongepowered', name: 'mixingradle', version: '0.7-SNAPSHOT'
     }
 }
@@ -38,7 +38,6 @@ minecraft {
             mods {
                 modClientRun {
                     source sourceSets.main
-                    source project(":Common").sourceSets.main
                 }
             }
         }
@@ -53,7 +52,6 @@ minecraft {
             mods {
                 modServerRun {
                     source sourceSets.main
-                    source project(":Common").sourceSets.main
                 }
             }
         }
@@ -68,7 +66,6 @@ minecraft {
             mods {
                 modDataRun {
                     source sourceSets.main
-                    source project(":Common").sourceSets.main
                 }
             }
         }
@@ -89,20 +86,22 @@ dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
     annotationProcessor 'org.spongepowered:mixin:0.8.4:processor'
-    compileOnly project(":Common")
     implementation fg.deobf('software.bernie.geckolib:geckolib-forge-1.19:3.1.14')
 
     compileOnly fg.deobf('curse.maven:torohealth-245733:3556931')
-    runtimeOnly fg.deobf('curse.maven:torohealth-245733:3556931')
 }
 
-tasks.withType(JavaCompile) {
-    source(project(":Common").sourceSets.main.allSource)
-}
+sourceSets.main.java.srcDir '../Common/src/main/java'
+sourceSets.main.resources.srcDir '../Common/src/main/resources'
 
 processResources {
-    from project(":Common").sourceSets.main.resources
+    filesMatching('pack.mcmeta') { expand project.properties }
 }
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+}
+test { useJUnitPlatform() }
 
 jar {
     manifest {
@@ -144,5 +143,51 @@ mixin {
     add sourceSets.main, "mimic.refmap.json"
 }
 
-apply from: "https://moddingtutorials.org/applesilicon.gradle"
-apply from: "../../mc-utils/publish.gradle"
+
+// GeckoLib 3 bundles Java sources; do not let Javadoc compile dependency sources.
+javadoc { options.addStringOption('sourcepath', sourceSets.main.java.srcDirs.join(File.pathSeparator)) }
+
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+configurations {
+    gametestImplementation.extendsFrom implementation
+    gametestRuntimeOnly.extendsFrom runtimeOnly
+}
+minecraft.runs {
+    gameTestServer {
+        // Forge's inherited forceExit kills the Gradle daemon even when every test passes.
+        forceExit false
+        workingDirectory project.file('run-gametest')
+        property 'forge.enabledGameTestNamespaces', 'mimic'
+        property 'mixin.env.remapRefMap', 'true'
+        property 'mixin.env.refMapRemappingFile', "${projectDir}/build/createSrgToMcp/output.srg"
+        arg '-mixin.config=mimic.mixins.json'
+        mods {
+            mimic {
+                source sourceSets.main
+                source sourceSets.gametest
+            }
+        }
+    }
+}
+check.dependsOn gametestClasses
+
+// Keep CI isolated, fast, and deterministic; never run these tests in a player world.
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    doFirst {
+        // Vanilla GameTest supports human-readable SNBT templates directly.
+        copy {
+            from 'src/gametest/structures'
+            into 'run-gametest/gameteststructures'
+        }
+        def props = file('run-gametest/server.properties')
+        props.parentFile.mkdirs()
+        if (!props.exists()) {
+            props.text = 'level-type=minecraft:flat\ngenerator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:stone","height":3}],"biome":"minecraft:plains","structure_overrides":[]}\ngenerate-structures=false\nview-distance=2\nsimulation-distance=2\n'
+        }
+    }
+}

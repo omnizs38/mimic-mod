@@ -2,7 +2,7 @@
   "required": true,
   "minVersion": "0.8",
   "package": "ca.lukegrahamlandry.mimic.mixin",
-  "compatibilityLevel": "JAVA_16",
+  "compatibilityLevel": "JAVA_17",
   "refmap": "mimic.refmap.json",
   "plugin": "ca.lukegrahamlandry.mimic.MixinPlugin",
   "mixins": [

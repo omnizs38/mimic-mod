@@ -1,42 +1,40 @@
 package ca.lukegrahamlandry.mimic.goals;
 
 import ca.lukegrahamlandry.mimic.entities.MimicEntity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
 
 public class MimicAttackGoal extends Goal {
-    MimicEntity owner;
-    static double rangeSq = 4;
-    public MimicAttackGoal(MimicEntity mimicEntity) {
-        this.owner = mimicEntity;
+    private final MimicEntity mimic;
+    private LivingEntity victim;
+    private boolean struck;
+
+    public MimicAttackGoal(MimicEntity mimic) { this.mimic = mimic; }
+    @Override public boolean requiresUpdateEveryTick() { return true; }
+
+    private boolean inRange(LivingEntity target) {
+        return target != null && mimic.distanceToSqr(target) <= 4.0
+                && mimic.getSensing().hasLineOfSight(target);
     }
 
-    @Override
-    public boolean canUse() {
-        if (!(this.owner.isAngry() && this.owner.hasTarget() && this.owner.getRandom().nextInt(3) == 0)) return false;
-        return inRange();
+    @Override public boolean canUse() {
+        return mimic.isAngry() && mimic.canHunt(mimic.getTarget()) && inRange(mimic.getTarget());
     }
-
-    private boolean inRange(){
-        return this.owner.distanceToSqr(this.owner.getTarget()) <= rangeSq;
+    @Override public boolean canContinueToUse() {
+        return mimic.isAngry() && mimic.canHunt(victim) && mimic.getTarget() == victim
+                && mimic.getAttackTick() > 0;
     }
-
-    @Override
-    public boolean canContinueToUse() {
-        return this.owner.isAngry() && this.owner.hasTarget() && this.owner.getAttackTick() > 0;
+    @Override public void start() {
+        victim = mimic.getTarget();
+        struck = false;
+        mimic.getNavigation().stop();
+        mimic.startAttackAnim();
     }
-
-    @Override
-    public void start() {
-        this.owner.startAttackAnim();
-    }
-
-    @Override
-    public void tick() {
-        if (this.owner.getAttackTick() == 4 && this.owner.hasTarget() && inRange()){
-            this.owner.doHurtTarget(this.owner.getTarget());
-            if (!this.owner.hasTarget()){
-                this.owner.setAngry(false);
-            }
+    @Override public void tick() {
+        if (!struck && mimic.getAttackTick() <= 4) {
+            struck = true;
+            if (mimic.canHunt(victim) && inRange(victim)) mimic.performBite(victim);
         }
     }
+    @Override public void stop() { victim = null; }
 }

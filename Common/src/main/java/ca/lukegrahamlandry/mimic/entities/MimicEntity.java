@@ -1,10 +1,17 @@
 package ca.lukegrahamlandry.mimic.entities;
 
 import ca.lukegrahamlandry.mimic.Constants;
+import ca.lukegrahamlandry.mimic.horror.HorrorDirector;
+import ca.lukegrahamlandry.mimic.horror.HorrorRules;
+import ca.lukegrahamlandry.mimic.horror.ThreatLedger;
+import net.minecraft.world.Difficulty;
+import java.util.*;
+import java.util.stream.Collectors;
 import ca.lukegrahamlandry.mimic.client.MimicContainer;
 import ca.lukegrahamlandry.mimic.goals.*;
 import com.mojang.datafixers.util.Pair;
-import net.minecraft.client.player.LocalPlayer;
+import ca.lukegrahamlandry.mimic.MimicForgeConfig;
+import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.NonNullList;
@@ -26,7 +33,6 @@ import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -65,9 +71,12 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
     private static final EntityDataAccessor<Integer> FACING_DIRECTION = SynchedEntityData.defineId(MimicEntity.class, EntityDataSerializers.INT);
 
     private UUID owner;
+    private final ThreatLedger threats = new ThreatLedger();
+    private long lastFocusSwitch, awarenessResumeAt, horrorExpiresAt;
+    private int appliedStage = -1;
 
-    int playerLookTicks = 0;
-    Player playerLooking;
+    private int playerLookTicks = 0;
+    private Player playerLooking;
     int scaredTicks = 0;
     boolean hasAlreadyGeneratedLoot = false;
 
@@ -84,16 +93,123 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
                 .add(Attributes.KNOCKBACK_RESISTANCE, 1).add(Attributes.MOVEMENT_SPEED, 0.55).add(Attributes.FOLLOW_RANGE, 32.0D);
     }
 
+    public int horrorStage() {
+        return !level.isClientSide && canHunt() ? HorrorDirector.stage((ServerLevel) level) : 0;
+    }
+    public double pursuitRange() { return Math.min(64, MimicForgeConfig.pursuitRange.get() + horrorStage() * 0.5); }
+    public int sightMemoryTicks() { return Math.min(1200, MimicForgeConfig.memoryTicks.get() + horrorStage() * 4); }
+    public void markHorrorSpawn(long expiresAt) { horrorExpiresAt = expiresAt; }
+    public int trackedPlayers() { return threats.size(level.getGameTime()); }
+
+    public void applyCombatConfig() {
+        int stage = horrorStage();
+        double oldMax = this.getMaxHealth();
+        float fraction = oldMax <= 0 ? 1 : this.getHealth() / (float) oldMax;
+        getAttribute(Attributes.MAX_HEALTH).setBaseValue(Math.min(1024, MimicForgeConfig.health.get()
+                * HorrorRules.multiplier(stage, MimicForgeConfig.dailyHealth.get())));
+        getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(Math.min(1024, MimicForgeConfig.damage.get()
+                * HorrorRules.multiplier(stage, MimicForgeConfig.dailyDamage.get())));
+        getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(Math.min(1.0, 0.55
+                * HorrorRules.multiplier(stage, MimicForgeConfig.dailySpeed.get())));
+        getAttribute(Attributes.ARMOR).setBaseValue(MimicForgeConfig.armor.get());
+        getAttribute(Attributes.FOLLOW_RANGE).setBaseValue(pursuitRange());
+        setHealth(fraction * getMaxHealth());
+        appliedStage = stage;
+    }
+
+    public boolean canHunt() {
+        return !isTamed() && !isLocked() && level.getDifficulty() != Difficulty.PEACEFUL;
+    }
+
+    public boolean canHunt(LivingEntity target) {
+        return canHunt() && target instanceof Player player && player.isAlive()
+                && !player.isCreative() && !player.isSpectator() && target.level == level;
+    }
+
+    public void provoke(Player player) {
+        if (level.isClientSide || !canHunt(player)) return;
+        long now = level.getGameTime();
+        threats.observe(player.getUUID(), now, sightMemoryTicks(), 10.0, MimicForgeConfig.maxTrackedPlayers.get());
+        // Remember every attacker, but never redirect an already telegraphed bite.
+        if (getAttackTick() == 0 || !canHunt(getTarget())) focus(player, now);
+    }
+    private void focus(Player player, long now) {
+        setTarget(player);
+        setAngry(true);
+        threats.focused(player.getUUID());
+        lastFocusSwitch = now;
+    }
+    public void performBite(LivingEntity primary) {
+        if (level.isClientSide || !canHunt(primary) || distanceToSqr(primary) > 4.0
+                || !getSensing().hasLineOfSight(primary)) return;
+        double forwardX = primary.getX() - getX(), forwardZ = primary.getZ() - getZ();
+        doHurtTarget(primary);
+        if (!MimicForgeConfig.horrorEnabled.get() || MimicForgeConfig.cleaveDamage.get() <= 0) return;
+        List<Player> nearby = level.players().stream().filter(player -> player != primary && canHunt(player))
+                .filter(player -> distanceToSqr(player) <= 4.0 && getSensing().hasLineOfSight(player))
+                .filter(player -> HorrorRules.inBiteCone(player.getX() - getX(), player.getZ() - getZ(), forwardX, forwardZ))
+                .sorted(Comparator.comparingDouble(this::distanceToSqr))
+                .limit(Math.max(0, MimicForgeConfig.maxTrackedPlayers.get() - 1)).collect(Collectors.toList());
+        float damage = (float) (getAttributeValue(Attributes.ATTACK_DAMAGE) * MimicForgeConfig.cleaveDamage.get());
+        for (Player player : nearby) {
+            if (player.hurt(DamageSource.mobAttack(this), damage)) {
+                threats.observe(player.getUUID(), level.getGameTime(), sightMemoryTicks(), 2.0,
+                        MimicForgeConfig.maxTrackedPlayers.get());
+            }
+        }
+        if (!nearby.isEmpty()) playSound(SoundEvents.PLAYER_ATTACK_SWEEP, 0.5F, 0.8F);
+    }
+
+    public void finishHunt() {
+        setTarget(null);
+        setAngry(false);
+        getNavigation().stop();
+        threats.clear();
+        awarenessResumeAt = level.getGameTime() + 100;
+    }
+    private void updateAwareness() {
+        long now = level.getGameTime();
+        if (!canHunt() || isNoAi() || isOpen() || now < awarenessResumeAt || tickCount % 10 != 0
+                || !MimicForgeConfig.horrorEnabled.get()) return;
+        double radius = Math.min(32, 8 + horrorStage() * 0.6);
+        List<Player> candidates = level.players().stream().filter(this::canHunt)
+                .filter(player -> distanceToSqr(player) <= radius * radius && getSensing().hasLineOfSight(player))
+                .sorted(Comparator.comparingDouble(this::distanceToSqr))
+                .limit(MimicForgeConfig.maxTrackedPlayers.get()).collect(Collectors.toList());
+        Set<UUID> eligible = new HashSet<>();
+        for (Player player : candidates) {
+            eligible.add(player.getUUID());
+            threats.observe(player.getUUID(), now, sightMemoryTicks(), 1.0, MimicForgeConfig.maxTrackedPlayers.get());
+        }
+        if (getAttackTick() > 0 || candidates.isEmpty()) return;
+        if (!canHunt(getTarget()) || !isAngry() || now - lastFocusSwitch >= MimicForgeConfig.switchTicks.get()) {
+            UUID chosen = threats.choose(now, eligible);
+            for (Player player : candidates) {
+                if (player.getUUID().equals(chosen)) { focus(player, now); break; }
+            }
+        }
+    }
+
+    public boolean canEatChests() {
+        return !level.isClientSide && canHunt() && MimicForgeConfig.eatChests.get()
+                && net.minecraftforge.event.ForgeEventFactory.getMobGriefingEvent(level, this);
+    }
+
+    public boolean isOwnedBy(Player player) {
+        return owner != null && owner.equals(player.getUUID());
+    }
+
     @Override
     protected void registerGoals() {
-        this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(this, Player.class, true));
-        this.goalSelector.addGoal(2, new MimicChaseGoal(this, 0.6D, 10));
+        this.goalSelector.addGoal(0, new FloatGoal(this));
+        this.goalSelector.addGoal(2, new MimicChaseGoal(this));
         this.goalSelector.addGoal(2, new MimicAttackGoal(this));
 
         this.goalSelector.addGoal(3, new EatChestGoal(this));
         this.goalSelector.addGoal(3, new FindChestGoal(this, 0.5D));
 
         this.goalSelector.addGoal(2, new LockedPanicGoal(this, 0.6));
+        this.goalSelector.addGoal(4, new MimicStalkGoal(this));
         this.goalSelector.addGoal(6, new TamedFollowGoal(this, 0.75D, 8.0F, 2.0F, false));
 
         this.goalSelector.addGoal(7, new MimicWanderGoal(this, 0.5D));
@@ -104,34 +220,58 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         super.tick();
 
         if (!this.level.isClientSide()){
+            if (tickCount % 200 == 0 && appliedStage != horrorStage()) applyCombatConfig();
+            if (level.getDifficulty() == Difficulty.PEACEFUL && getTarget() != null) finishHunt();
+            if (horrorExpiresAt > 0 && level.getGameTime() >= horrorExpiresAt && !isTamed() && !isLocked()
+                    && !hasAlreadyGeneratedLoot && isEmpty() && level.getNearestPlayer(this, 48) == null) {
+                discard();
+                return;
+            }
+            updateAwareness();
             if (this.getAttackTick() > 0) this.getEntityData().set(ATTACK_TICK, this.getAttackTick() - 1);
             if (this.getEntityData().get(UP_DOWN_TICK) > 0) this.getEntityData().set(UP_DOWN_TICK, this.getEntityData().get(UP_DOWN_TICK) - 1);
             if (this.getEntityData().get(OPEN_CLOSE_TICK) > 0) this.getEntityData().set(OPEN_CLOSE_TICK, this.getEntityData().get(OPEN_CLOSE_TICK) - 1);
             if (scaredTicks > 0) scaredTicks--;
 
-            if (this.playerLookTicks > 0){
-                this.playerLookTicks--;
-                if (this.playerLookTicks == 0 && !isLocked() && !isTamed()){
-                    ((ServerPlayer)this.playerLooking).closeContainer();
-                    this.setAngry(true);
-                    float strength = 1;
-                    this.playerLooking.knockback(strength * 0.5F, Mth.sin(this.getYRot() * ((float)Math.PI / 180F)), (-Mth.cos(this.getYRot() * ((float)Math.PI / 180F))));
+            if (isAngry() && !canHunt(getTarget())) {
+                setTarget(null);
+                setAngry(false);
+                getNavigation().stop();
+            }
+            if (this.playerLookTicks > 0 && --this.playerLookTicks == 0) {
+                Player victim = this.playerLooking;
+                this.playerLooking = null;
+                if (victim instanceof ServerPlayer serverPlayer && victim.isAlive()
+                        && victim.level == level && distanceToSqr(victim) <= 64.0) {
+                    // Never close an unrelated menu opened after the mimic's inventory.
+                    if (serverPlayer.containerMenu instanceof MimicContainer menu && menu.getContainer() == this) {
+                        serverPlayer.closeContainer();
+                    }
+                    if (canHunt(victim)) provoke(victim);
                 }
             }
 
-            if (!this.isAngry() && !this.isStealth() && !this.isTamed() && getRandom().nextInt(boredOfWanderingChance) == 0){
+            if (!this.isAngry() && !this.isStealth() && !this.isTamed() && !this.isLocked() && !this.isOpen() && getNavigation().isDone() && getRandom().nextInt(boredOfWanderingChance) == 0){
                 this.snapToBlock(this.blockPosition(), Direction.from2DDataValue(Math.floorDiv((int) this.yBodyRot, 90)));
                 this.setStealth(true);
             }
 
             // stealth if a player is near
-            if (!this.isAngry() && !this.isStealth() && !this.isTamed() && !this.isLocked() && getRandom().nextInt(5) == 0){
+            if (!this.isAngry() && !this.isStealth() && !this.isTamed() && !this.isLocked() && getNavigation().isDone() && getRandom().nextInt(5) == 0){
                 AABB box = this.getBoundingBox().inflate(10);  // range in blocks
                 for(Player playerentity : level.players()) {
-                    if (!playerentity.isCreative() && box.contains(playerentity.getX(), playerentity.getY(), playerentity.getZ())) {
+                    if (!playerentity.isCreative() && !playerentity.isSpectator() && box.contains(playerentity.getX(), playerentity.getY(), playerentity.getZ())) {
                         this.snapToBlock(this.blockPosition(), null);
                         this.setStealth(true);
                     }
+                }
+            }
+
+            if (canHunt() && isStealth() && !isOpen() && tickCount % 10 == 0) {
+                Player nearby = level.getNearestPlayer(this, 2.5);
+                if (canHunt(nearby) && getSensing().hasLineOfSight(nearby)) {
+                    net.minecraft.world.phys.Vec3 towardMimic = position().subtract(nearby.position()).normalize();
+                    if (nearby.getLookAngle().dot(towardMimic) < 0.0) provoke(nearby);
                 }
             }
 
@@ -226,6 +366,8 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
     @Override
     protected InteractionResult mobInteract(Player player, InteractionHand hand) {
         if (hand == InteractionHand.OFF_HAND) return InteractionResult.PASS;
+        if (level.isClientSide) return InteractionResult.SUCCESS;
+        if (isTamed() && !isOwnedBy(player)) return InteractionResult.FAIL;
 
         // sit / stand
         if (isTamed() && player.isShiftKeyDown() && !this.level.isClientSide()){
@@ -244,6 +386,7 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         // lock
         if (canItemLock(stack) && !this.isTamed() && !this.isLocked()){
             this.setLocked(true);
+            this.playerLookTicks = 0;
             this.snapToBlock(this.blockPosition(), Direction.from2DDataValue(Math.floorDiv((int) this.yBodyRot, 90)));
             if (!player.isCreative()) stack.shrink(1);
             this.getNavigation().moveTo((Path) null, 0);
@@ -293,8 +436,9 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         super.dropCustomDeathLoot(p_213333_1_, p_213333_2_, p_213333_3_);
         if (this.isEmpty()) this.generateDefaultLoot();
         for (int i=0;i<this.heldItems.size();i++){
-            if (this.heldItems.get(i).getItem() != Items.AIR){
+            if (!this.heldItems.get(i).isEmpty()) {
                 this.spawnAtLocation(this.heldItems.get(i));
+                this.heldItems.set(i, ItemStack.EMPTY);
             }
         }
     }
@@ -337,6 +481,7 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         }
 
         compoundNBT.put("mimichelditems", nbt);
+        if (horrorExpiresAt > 0) compoundNBT.putLong("HorrorExpiresAt", horrorExpiresAt);
 
         compoundNBT.putBoolean("tame", isTamed());
         compoundNBT.putBoolean("lock", isLocked());
@@ -344,22 +489,22 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         compoundNBT.putBoolean("stealth", isStealth());
         compoundNBT.putBoolean("genloot", this.hasAlreadyGeneratedLoot);
 
-        if (this.isTamed()){
-            compoundNBT.putString("owner", this.owner.toString());
-        }
+        if (this.owner != null) compoundNBT.putUUID("Owner", this.owner);
     }
 
     @Override
     public void readAdditionalSaveData(CompoundTag compoundNBT) {
         super.readAdditionalSaveData(compoundNBT);
 
+        horrorExpiresAt = Math.max(0L, compoundNBT.getLong("HorrorExpiresAt"));
+        threats.clear();
+        appliedStage = -1;
         CompoundTag nbt = compoundNBT.getCompound("mimichelditems");
-        int i = 0;
-        while (nbt.contains(String.valueOf(i))) {
-            CompoundTag tag = nbt.getCompound(String.valueOf(i));
-            ItemStack stack = ItemStack.of(tag);
-            this.heldItems.set(i, stack);
-            i++;
+        this.heldItems = NonNullList.withSize(getContainerSize(), ItemStack.EMPTY);
+        for (int i = 0; i < this.heldItems.size(); i++) {
+            if (nbt.contains(String.valueOf(i))) {
+                this.heldItems.set(i, ItemStack.of(nbt.getCompound(String.valueOf(i))));
+            }
         }
 
         setTamed(compoundNBT.getBoolean("tame"));
@@ -368,30 +513,31 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         setAngry(compoundNBT.getBoolean("angry"));
         this.hasAlreadyGeneratedLoot = compoundNBT.getBoolean("genloot");
 
-        if (this.isTamed()){
-            this.owner = UUID.fromString(compoundNBT.getString("owner"));
+        this.owner = null;
+        if (compoundNBT.hasUUID("Owner")) {
+            this.owner = compoundNBT.getUUID("Owner");
+        } else if (compoundNBT.contains("owner")) {
+            // Preserve worlds made with the legacy string-based owner format.
+            try { this.owner = UUID.fromString(compoundNBT.getString("owner")); }
+            catch (IllegalArgumentException ignored) { /* Corrupt owner: keep storage, do not crash. */ }
         }
+        if (isTamed()) setTarget(null);
 
     }
 
     public boolean hurt(DamageSource source, float amount) {
-        if (this.isInvulnerableTo(source)) {
-            return false;
-        }
-        if (source.getDirectEntity() != null && source.getDirectEntity() instanceof LivingEntity && ((LivingEntity)source.getDirectEntity()).getItemInHand(InteractionHand.MAIN_HAND).getItem() instanceof AxeItem){
-            amount *= 2;
-        }
-
-        if (!level.isClientSide() && !this.isTamed() && source.getEntity() != null && source.getEntity() instanceof Player && !((Player)source.getEntity()).isCreative()){
-            this.setAngry(true);
-        }
-
-        return super.hurt(source, amount);
+        if (this.isInvulnerableTo(source)) return false;
+        if (source.getDirectEntity() instanceof LivingEntity attacker
+                && attacker.getMainHandItem().getItem() instanceof AxeItem) amount *= 2;
+        boolean damaged = super.hurt(source, amount);
+        if (damaged && !level.isClientSide && source.getEntity() instanceof Player player) provoke(player);
+        return damaged;
     }
 
-    public LivingEntity getOwner(){
-        if (!this.isTamed() || this.level.isClientSide()) return null;
-        return (LivingEntity) ((ServerLevel)this.level).getEntity(this.owner);
+    @Nullable
+    public LivingEntity getOwner() {
+        if (!isTamed() || level.isClientSide || owner == null) return null;
+        return ((ServerLevel) level).getPlayerByUUID(owner);
     }
 
     @Override
@@ -460,8 +606,8 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
 
     public void setAngry(boolean flag) {
         if (flag){
+            if (!canHunt()) return;
             setStealth(false);
-            if (isTamed() || isLocked()) return;
         }
         this.getEntityData().set(IS_ANGRY, flag);
     }
@@ -477,7 +623,11 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
 
     public void setLocked(boolean flag) {
         if (flag){
+            threats.clear();
+            appliedStage = -1;
             setAngry(false);
+            setTarget(null);
+            getNavigation().stop();
             setStealth(true);
         }
         if (!isLocked() && flag){
@@ -489,7 +639,13 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
 
     public void setTamed(boolean flag) {
         if (flag){
+            threats.clear();
+            appliedStage = -1;
+            horrorExpiresAt = 0;
             setAngry(false);
+            setTarget(null);
+            playerLookTicks = 0;
+            setPersistenceRequired();
         }
         this.getEntityData().set(IS_TAMED, flag);
     }
@@ -505,10 +661,11 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
     @Nullable
     @Override
     public AbstractContainerMenu createMenu(int id, Inventory playerInventory, Player player) {
-        if (!this.isTamed()) {
-            this.playerLooking = player;
-            this.playerLookTicks = 15;
-        }
+        if (!stillValid(player) || !isStealth()) return null;
+        if (playerLooking != null && playerLooking != player
+                && playerLooking.containerMenu instanceof MimicContainer menu && menu.getContainer() == this) return null;
+        this.playerLooking = player;
+        if (canHunt()) this.playerLookTicks = 15;
         MenuType<MimicContainer> menuType = (MenuType<MimicContainer>) Registry.MENU.get(this.isTamed() ? Constants.TAME_MIMIC_CONTAINER : Constants.EVIL_MIMIC_CONTAINER);
         return new MimicContainer(menuType, id, playerInventory, this, 3);
     }
@@ -549,15 +706,14 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         return this.heldItems.get(index);
     }
 
-    private void onTake(){
-        this.playerLookTicks = 2;
-        if (this.isLocked() && getRandom().nextInt(3) == 0){
-            if (this.playerLooking instanceof ServerPlayer){
-                ((ServerPlayer)this.playerLooking).closeContainer();
-            } else if (this.playerLooking instanceof LocalPlayer){
-                ((LocalPlayer)this.playerLooking).closeContainer();
+    public void onItemTaken() {
+        if (level.isClientSide || isTamed()) return;
+        if (!isLocked()) this.playerLookTicks = 2;
+        if (isLocked() && getRandom().nextInt(3) == 0) {
+            if (playerLooking instanceof ServerPlayer serverPlayer
+                    && serverPlayer.containerMenu instanceof MimicContainer menu && menu.getContainer() == this) {
+                serverPlayer.closeContainer();
             }
-
             this.scaredTicks = 400;
             this.setStealth(false);
         }
@@ -568,7 +724,7 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
         ItemStack itemstack = ContainerHelper.removeItem(this.heldItems, p_70298_1_, p_70298_2_);
         if (!itemstack.isEmpty()) {
             this.setChanged();
-            onTake();
+            onItemTaken();
         }
 
         return itemstack;
@@ -577,7 +733,7 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
     @Override
     public ItemStack removeItemNoUpdate(int p_70304_1_) {
         ItemStack itemstack = ContainerHelper.takeItem(this.heldItems, p_70304_1_);
-        if (!itemstack.isEmpty()) onTake();
+        if (!itemstack.isEmpty()) onItemTaken();
 
         return itemstack;
     }
@@ -585,7 +741,8 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
     @Override
     public void setItem(int index, ItemStack stack) {
         this.heldItems.set(index, stack);
-        if (stack.isEmpty()) onTake();
+        stack.setCount(Math.min(stack.getCount(), getMaxStackSize()));
+        this.setChanged();
     }
 
     @Override
@@ -595,7 +752,8 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
 
     @Override
     public boolean stillValid(Player p_70300_1_) {
-        return this.isAlive();
+        return this.isAlive() && p_70300_1_.level == level && distanceToSqr(p_70300_1_) <= 64.0
+                && (!isTamed() || isOwnedBy(p_70300_1_));
     }
 
     @Override
@@ -605,18 +763,15 @@ public class MimicEntity extends PathfinderMob implements MenuProvider, Containe
 
 
     public void consumeChest(BlockPos pos) {
+        if (level.isClientSide || !level.hasChunkAt(pos)) return;
         BlockEntity tile = this.level.getBlockEntity(pos);
-        if (!(tile instanceof BaseContainerBlockEntity)) {
-            System.out.println("mimic failed to eat chest at " + pos);
-            return;
-        }
+        if (!(tile instanceof ChestBlockEntity chestEntity) || ChestBlockEntity.getOpenCount(level, pos) > 0) return;
 
         BaseContainerBlockEntity chest = (BaseContainerBlockEntity) tile;
 
         // take items
         for (int i=0;i<chest.getContainerSize();i++){
-            this.addItem(chest.getItem(i));
-            chest.setItem(i, ItemStack.EMPTY);
+            this.addItem(chest.removeItemNoUpdate(i));
         }
         // this.owner.addItem(new ItemStack(Items.CHEST));
 

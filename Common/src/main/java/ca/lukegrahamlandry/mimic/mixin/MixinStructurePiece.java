@@ -21,6 +21,7 @@ import java.util.Random;
 public abstract class MixinStructurePiece {
     @Inject(at = @At("RETURN"), method = "createChest(Lnet/minecraft/world/level/ServerLevelAccessor;Lnet/minecraft/world/level/levelgen/structure/BoundingBox;Lnet/minecraft/util/RandomSource;Lnet/minecraft/core/BlockPos;Lnet/minecraft/resources/ResourceLocation;Lnet/minecraft/world/level/block/state/BlockState;)Z")
     private void createChest(ServerLevelAccessor world, BoundingBox p_191080_2_, RandomSource rand, BlockPos pos, ResourceLocation loottable, @Nullable BlockState state, CallbackInfoReturnable<Boolean> callback) {
+        if (!Boolean.TRUE.equals(callback.getReturnValue())) return;
         BlockState topState = world.getBlockState(pos.above());
         if (topState.getBlock() == Blocks.STRUCTURE_BLOCK || topState.getBlock() == Blocks.VINE || topState.isAir()){
             world.setBlock(pos.above(), Constants.getMimicSpawnBlock().defaultBlockState(), 3);
